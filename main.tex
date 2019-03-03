@@ -1,0 +1,214 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{comment}
+\usepackage{multicol}
+\usepackage{minted}
+\newcommand{\sub}[1]{\textsubscript{#1}}
+\newcommand{\CIChat}{CIC$\widehat{~}$\ }
+\newcommand{\CIChatbar}{CIC$\widehat{\underline{~}}$\ }
+\newcommand{\Fhat}{F$\widehat{~}$\ }
+
+\title{CPSC 449 Honours Thesis Proposal}
+\author{Jonathan Chan}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+\subsection{Termination in Coq} \label{coq_termination}
+In Coq and other dependently-typed proof-assistant languages that use the Curry–Howard correspondence, in which logical propositions are represented as types, programs are required to terminate. In particular, in the Calculus of (co)Inductive Constructions, the type theory on which Coq is based, recursive functions that recur on inductive types need to be proven terminating. The most commonly used method by Giménez \cite{gimenez} is to impose a \textit{guarded-by-destructors} condition on recursive functions, which essentially imposes that the argument of a recursive call must be a structurally recursive component of the argument of the function, guaranteeing that these calls occur only on ever-smaller inductive terms. As such, the following nonterminating function is not accepted by Coq, since the recursive call is not to some smaller component of the argument:
+
+\begin{minted}{coq}
+Fixpoint grow (n: nat): nat := grow (S n).
+\end{minted}
+
+Coq currently uses a relaxation of these conditions, the most important difference being that it will unfold the definitions of other functions called within the recursive call to determine that the argument is structurally smaller. This allows for functions like the following:
+
+\begin{multicols}{2}
+\begin{minted}{coq}
+Definition ident (n: nat): nat :=
+  match n with
+  | O   => n
+  | S m => n
+  end.
+\end{minted}
+\begin{minted}{coq}
+Fixpoint shrink (n: nat): nat :=
+  match n with
+  | O   => O
+  | S m => shrink (ident m)
+  end.
+\end{minted}
+\end{multicols}
+
+which might be unfolded to
+
+\begin{minted}{coq}
+Fixpoint shrink' (n: nat): nat :=
+  match n with
+  | O    => O
+  | S n' =>
+    match n' with
+    | O   => shrink' n'
+    | S m => shrink' n'
+    end
+  end.
+\end{minted}
+
+Since the argument of the recursive call, \texttt{n'}, is a structurally smaller component of the argument of the function, \texttt{n}, this function is accepted.
+
+\subsection{Sized Types}
+Sized types as formulated in \cite{hughes} are a type system with inductive data types, each of which comes with a family of types indexed by ordinals $0, 1, 2, \dots$ representing increasingly larger approximations of the infinite-sized type indexed by $\omega$. That is, given some inductive type \texttt{D}, we have the subtyping relation
+    $$\texttt{D}_0 \preceq \texttt{D}_1 \preceq \dots \preceq \texttt{D}_\omega$$
+where $\texttt{D}_\omega$ encompasses all inhabitants of the type \texttt{D}. For instance, a \texttt{Nat} data type of natural numbers might have inhabitants
+
+\begin{alignat*}{2}
+    \texttt{O: }        &\texttt{Nat}_1\\
+    \texttt{S O: }      &\texttt{Nat}_2\\
+    \texttt{S (S O): }  &\texttt{Nat}_3\\
+\end{alignat*}
+
+and so on, with $\texttt{Nat}_\omega$ being the type of all natural numbers. Informally, the size index counts the depth of nested constructors.
+
+Function types are explicitly annotated with size indices, which can only be linear functions of size variables (specifically, addition of indices and multiplication by constants). As an example, the type annotation of a function that appends two lists might be:
+$$\texttt{append: } \forall i, j.\ \forall \texttt{t}.\ \texttt{List}_i\ \texttt{t} \rightarrow \texttt{List}_{j + 1}\ \texttt{t} \rightarrow \texttt{List}_{i + j}\ \texttt{t}$$
+
+so that we would assign types as follows:
+
+\begin{alignat*}{2}
+    &\texttt{a = Cons O Nil: }           &\texttt{List}_2\ \texttt{Nat}\\
+    &\texttt{b = Cons O (Cons O Nil): }  &\texttt{List}_3\ \texttt{Nat}\\
+    &\texttt{append a b == Cons O (Cons O (Cons O Nil))): }  &\texttt{List}_4\ \texttt{Nat}
+\end{alignat*}
+
+and the size indices in \texttt{append} would be instantiated to $i = 2, j = 2$ in the call. Notice that while \texttt{a} has two constructors and \texttt{b} has three, the appended list has only four constructors, not five: one of the \texttt{Nil}s is lost. The second argument of \texttt{append} needs to have its type specified to $j + 1$ to illustrate the lost \texttt{Nil} and to give the return as precise a size as possible. Functions that produce values of size larger than linear in the size of its arguments, such as a \texttt{factorial} function, would require a return type indexed by $\omega$.
+
+A well-typed recursive function can then be proven to terminate by checking that recursive calls are made on values with strictly smaller sized types. This size inference is implemented as solving a constraint system of integer linear inequalities.
+
+\subsection{CIC with Type-Based Termination}
+\CIChat \cite{gregoire} and \CIChatbar \cite{sacchini} are extensions of CIC that use a form of sized types to assert termination of recursive functions rather than using a structural condition. Rather than indexing by ordinals, both have three families of size indices: arbitrary size variables $s$ for finite sizes, their successors $\hat{s}$, and the index of full types $\infty$ (equivalent to $\omega$). Inductive types are given a successor size index $\hat{s}$, while their recursive arguments are given the size $s$. For example, the constructors for a list might have types 
+
+\begin{alignat*}{2}
+\texttt{nil: }  &\forall \texttt{t}.\ \texttt{List}_{\hat{s}}\\
+\texttt{cons: } &\forall \texttt{t}.\ \texttt{t} \rightarrow \texttt{List}_{s} \rightarrow \texttt{List}_{\hat{s}}
+\end{alignat*}
+
+Termination is then verified by checking that if some argument of a recursive function is assigned type $\texttt{D}_{\hat{s}}$, then that argument in recursive calls must have type $\texttt{D}_{s}$. 
+
+Restricting to these families reduces the precision with which functions can be typed. The result of using \texttt{append} on two lists no longer has a size exactly equal to the number of constructor it has; instead, \texttt{append} must be typed as
+
+$$\texttt{append: } \forall s, r.\ \forall \texttt{t}.\ \texttt{List}_s\ \texttt{t} \rightarrow \texttt{List}_{r}\ \texttt{t} \rightarrow \texttt{List}_{\infty}\ \texttt{t}$$
+
+However, this simplification reduces the complexity of the implementation: the algorithm presented in \cite{inference} has time complexity $O(n^2)$, where $n$ is the number of size variables, while the constraint-solving described in \cite{hughes} uses the Omega test \cite{omega}, which has complexity $O(mn^2)$ or $O(n^3)$ in special cases, where $m$ is the number of constraints. Furthermore, it allows size information to be entirely inferred and requires no explicit annotation from the user, which the authors of \CIChat and \CIChatbar have asserted is an important requirement for the practical usability of the languages.
+
+\section{Objectives}
+The structural termination checking employed by Coq has a few key problems. One of them is that whether a program is accepted by Coq or not can be sensitive to slight syntactical changes. For example, in \texttt{ident} defined in section~\ref{coq_termination}, if either of the branches of the match were replaced by \texttt{O => O} or \texttt{S m => S m} respectively, \texttt{shrink} would no longer be accepted, despite being semantically the same, since even with unfolding it does not know that \texttt{O} or \texttt{S m} is equal to \texttt{n'}.
+
+This is part of the general problem of structural termination checking being too restrictive and not being able to accept a wider, more useful set of terminating programs. Consider the following implementation of quicksort:
+
+\begin{multicols}{2}
+\begin{minted}{coq}
+Fixpoint filter {X} (p: X -> bool) l :=
+  match l with
+  | nil => nil
+  | h :: t =>
+    if   p h
+    then h :: filter p t
+    else filter p t
+  end.
+\end{minted}
+
+\begin{minted}{coq}
+Fixpoint quicksort l :=
+  match l with
+  | nil => nil
+  | h :: t =>
+    quicksort (filter (gtb h) t) ++ 
+    h :: quicksort (filter (leb h) t)
+  end.
+\end{minted}
+\end{multicols}
+
+By inspection, we can see that \texttt{quicksort} is terminating, but this definition is not accepted by Coq because it expects the recursive call to take \texttt{t} or something structurally smaller than \texttt{t}.
+
+On the other hand, this can be typed in \CIChatbar. We assign these functions the following types:
+
+$$\texttt{filter: } \forall s.\ \forall \texttt{t}.\ (\texttt{t} \rightarrow \texttt{Bool}) \rightarrow \texttt{List}_s\ \texttt{t} \rightarrow \texttt{List}_s\ \texttt{t}$$
+$$\texttt{quicksort: } \forall s.\ \texttt{List}_s\ \texttt{Nat} \rightarrow \texttt{List}_\infty\ \texttt{Nat}$$
+
+Notice that \texttt{filter} terminates because if \texttt{l} has size $\hat{s}$, then \texttt{t} must have size $s$. Then \texttt{quicksort} also terminates, since if \texttt{l} has size $\hat{s}$, then \texttt{t} must have size $s$, and by the type of \texttt{filter}, the argument to the recursive call of \texttt{quicksort} also has size $s$. Similarly, we can assign \texttt{ident} the type
+
+$$\texttt{ident: } \forall s.\ \texttt{Nat}_s \rightarrow \texttt{Nat}_s$$
+
+so that no unfolding is required: \texttt{shrink} merely needs to ensure that its recursive call's argument has the correct smaller size.
+
+The goal of this thesis, then, is to resolve these problems in a non-trivial subset of Coq by implementing sized types as defined by \CIChatbar in Coq to replace the existing syntactic termination checking. Aside from allowing a larger set of terminating recursive functions without additional work by the user to prove their termination, reasoning about sized types would also be more intuitive than thinking about an array of guard predicates, and termination is reduced to type-checking, no longer requiring the unfolding of functions. Furthermore, we choose \CIChatbar over \CIChat because normalization has been explicitly proven in the former. However, the inference algorithms presented in \CIChat and \Fhat \cite{inference} will be useful references, as well as a similar existing implementation in Agda \cite{miniagda}.
+
+\subsection{Timeline}
+\begin{tabular}{|l|l|}
+    \hline
+    \textbf{Task} & \textbf{Period} \\
+    \hline
+    Preparatory work: Set up development environment and become familiar with codebase & \\
+    Add size fields to internal representation & \\
+    Implement size inference algorithm & \\
+    Modify termination checker to use sized types & \\
+    Final testing and fixes & \\
+    Wrap-up and write-up & \\
+    \hline
+\end{tabular}
+
+\begin{comment}
+\section{Extensions Beyond Scope}
+\begin{itemize}
+    \item Implementing translation of existing Coq code to a form that will work with sized types termination checking (since not all code would be able to be typed).
+    \item Ensuring productivity of coinductive data and corecursive functions using sized types \cite{coinductive}.
+    \item Enhancing successor-only sized types with addition using sized products \cite{sizedproducts}. See also \cite{chin}.
+\end{itemize}
+\end{comment}
+
+\bibliographystyle{plain}
+\bibliography{biblio.bib}
+\end{document}
+
+merge: forall i, j. forall t. List{i + 1} t -> List{j + 1} t -> List{i + j + 1} t
+branch 1: i     -> j + 1 -> i + j
+branch 2: i + 1 -> i     -> i + j
+
+merge: forall s, r. forall t. List{^s} t -> List{^r} t -> List{inf} t
+
+\CIChatbar requires that an explicit recursive argument be annotated with *, but how does it know which one?
+
+Fixpoint grow2 n m :=
+    if   (n < m)
+    then grow2 (n + 1) (m - 1)
+    else grow2 (n - 1) (m + 1)
+    
+Doesn't shrink in a single argument, doesn't terminate, but this does terminate:
+
+\begin{minted}{coq}
+Fixpoint merge l1 l2 :=
+   match l1, l2 with
+   | [], _ => l2
+   | _, [] => l1
+   | a1::l1', a2::l2' =>
+       if a1 <=? a2 then a1 :: merge l1' l2 else a2 :: merge l1 l2'
+   end.
+\end{minted}
+
+Maybe check that at least one argument strictly decreases, all other arguments must be nonincreasing? But then this won't be accepted:
+
+Fixpoint shrink n m k :=
+    match n with
+    | O => k
+    | S n' =>
+        match m with
+        | O => k
+        | S m' =>
+            if   n' < m'
+            then shrink n m' (k + 1)
+            else shrink n' m (k + 1)
